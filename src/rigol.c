@@ -69,6 +69,38 @@ int dev_recv(int handle, unsigned char *buf, size_t size)
 	return rc;
 }
 
+void print_data(const char *buf, size_t count)
+{
+	int i;
+	for (i = 0; i < count; i++) {
+		if (i % 16 == 0)
+			printf("%08x  ", i);
+		printf("%02x ", buf[i]);
+		if (i % 16 == 7)
+			printf(" ");
+		if (i % 16 == 15)
+			printf("\n");
+	}
+	if (i % 16 != 0)
+		printf("\n");
+}
+
+void write_to_file(const char *filename, const char *buf, size_t count)
+{
+	int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+	if (fd < 0) {
+		fprintf(stderr, "Could not open file '%s': %s\n", filename,
+				strerror(errno));
+		return;
+	}
+	if (count != write(fd, buf, count))
+		fprintf(stderr, "Could not write to file '%s': %s\n", filename,
+				strerror(errno));
+	if (close(fd))
+		fprintf(stderr, "Could not close file '%s': %s\n", filename,
+				strerror(errno));
+}
+
 int main(int argc, char **argv)
 {
 
@@ -136,21 +168,10 @@ int main(int argc, char **argv)
 					fgets(x, 64, stdin);
 					if (x[strlen(x) - 1] == '\n')
 						x[strlen(x) - 1] = 0;
-					if (tolower(x[0]) == 'p') {
-						for(i = 10; i < rc; i++) {
-							printf("%02X", buf[i]);
-							if ((i % 32) == 31)
-								printf("\n");
-						}
-					} else {
-						int fd = open(x + 2, O_WRONLY | O_CREAT, 0777);
-						if (fd < 0)
-							perror("cannot open ");
-						if (len != write(fd, buf+10, len))
-							perror("cannot write");
-						if (close(fd))
-							perror("cannot close");;
-					}
+					if (tolower(x[0]) == 'p')
+						print_data(buf + 10, rc);
+					else
+						write_to_file(x + 2, buf + 10, len);
 				}
 			}
 		}
