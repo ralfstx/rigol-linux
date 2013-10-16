@@ -101,8 +101,20 @@ void write_to_file(const char *filename, const char *buf, size_t count)
 				strerror(errno));
 }
 
+int extract_data_length(const unsigned char *buf)
+{
+	int len = -1;
+	unsigned char head[10];
+	strncpy(head, buf, 10);
+	if (1 != sscanf(head + 2, "%d", &len))
+		printf("Warning: malformed header\n");
+	return len;
+}
+
 int main(int argc, char **argv)
 {
+	int len, rc;
+	unsigned char buf[max_response_length];
 
 	char device[256] = "/dev/usbtmc0";
 	if (argc > 2 && strncmp(argv[1], "-D", 2) == 0) {
@@ -111,11 +123,7 @@ int main(int argc, char **argv)
 		*argv += 2;
 	}
 
-	int handle;
-	int rc;
-	int i;
-	unsigned char buf[max_response_length];
-	handle = open(device, O_RDWR);
+	int handle = open(device, O_RDWR);
 	if (handle < 0) {
 		fprintf(stderr, "Could not open device '%s': %s\n", device,
 				strerror(errno));
@@ -145,34 +153,29 @@ int main(int argc, char **argv)
 		} else {
 			rc = dev_recv(handle, buf, max_response_length);
 			if (rc <= 0) {
-				printf("[%d]:\n", rc);
+				printf("[%d] bytes received\n", rc);
+			} else if (rc >= 10 && strncmp(buf, "#8", 2) == 0) {
+				// data header found
+				len = extract_data_length(buf);
+				if (len != rc - 10)
+					printf("Warning: header length and read count differs: %i, %i\n",
+							len, rc - 10);
+				printf("%d bytes of data received\n", len);
+				printf("print data or save to file? ");
+				fflush(stdout);
+				char x[256];
+				fgets(x, sizeof(x), stdin);
+				if (x[strlen(x) - 1] == '\n')
+					x[strlen(x) - 1] = 0;
+				if (tolower(x[0]) == 'p')
+					print_data(buf + 10, rc);
+				else
+					write_to_file(x + 2, buf + 10, len);
 			} else if (rc < 512) {
 				// assume this is just text
-				printf("[%d]:%s\n", rc, buf);
+				printf("%s\n", buf);
 			} else {
-				printf("[%d]:\n", rc);
-				if (strncmp(buf, "#8", 2) == 0) {
-					// header + samples
-					int len;
-					unsigned char z = buf[10];
-					buf[10] = 0;
-					if (1 != sscanf(buf + 2, "%d", &len))
-						printf("Warning - malformed header\n");
-					if (rc != 10 + len)
-						printf("Warning - inconsistent read() and header length %s\n", buf);
-					buf[10] = z;
-					int i;
-					printf("Print or Save filename? ");
-					fflush(stdout);
-					char x[64];
-					fgets(x, 64, stdin);
-					if (x[strlen(x) - 1] == '\n')
-						x[strlen(x) - 1] = 0;
-					if (tolower(x[0]) == 'p')
-						print_data(buf + 10, rc);
-					else
-						write_to_file(x + 2, buf + 10, len);
-				}
+				printf("[%d] bytes received, data header missing\n", rc);
 			}
 		}
 	}
