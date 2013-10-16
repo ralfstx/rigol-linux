@@ -33,39 +33,40 @@
 #include <linux/usb/tmc.h>
 #include <readline/readline.h>
 
+const int max_command_length = 255;
 const int max_response_length = 1024 * 1024 + 1024;
 const int normal_response_length = 1024;
 
-int rigol_write(int handle, unsigned char *string)
+int dev_send(int handle, const char *command)
 {
 	int rc;
-	unsigned char buf[256];
-	strncpy(buf, string, sizeof(buf));
+	char buf[max_command_length + 2];
 	buf[sizeof(buf) - 1] = 0;
-	strncat(buf, "\n", sizeof(buf));
-	buf[sizeof(buf) - 1] = 0;
+	buf[sizeof(buf) - 2] = 0;
+	if(strlen(command) > max_command_length) {
+		fprintf(stderr, "Could not send command: string too long");
+		return -1;
+	}
+	strncpy(buf, command, max_command_length);
+	strcat(buf, "\n");
 	rc = write(handle, buf, strlen(buf));
 	if (rc < 0)
-		perror("write error");
-	return(rc);
+		perror("Could not send command");
+	return rc;
 }
 
-int rigol_read(int handle, unsigned char *buf, size_t size)
+int dev_recv(int handle, unsigned char *buf, size_t size)
 {
 	int rc;
 	if (!size)
-		return(-1);
+		return -1;
 	buf[0] = 0;
 	rc = read(handle, buf, size);
-	if ((rc>0) && (rc<size))
+	if ((rc > 0) && (rc < size))
 		buf[rc] = 0;
-	if (rc < 0) {
-		if (errno == ETIMEDOUT)
-			printf("No response\n");
-		else
-			perror("read error");
-	}
-	return(rc);
+	if (rc < 0)
+		perror("Could not receive response");
+	return rc;
 }
 
 int main(int argc, char **argv)
@@ -84,12 +85,13 @@ int main(int argc, char **argv)
 	unsigned char buf[max_response_length];
 	handle = open(device, O_RDWR);
 	if (handle < 0) {
-		perror("error opening device");
+		fprintf(stderr, "Could not open device '%s': %s\n", device,
+				strerror(errno));
 		exit(1);
 	}
 
-	rigol_write(handle, "*IDN?");
-	rigol_read(handle, buf, normal_response_length);
+	dev_send(handle, "*IDN?");
+	dev_recv(handle, buf, normal_response_length);
 	printf("%s\n", buf);
 	
 	//readline
@@ -100,16 +102,16 @@ int main(int argc, char **argv)
 		char *cmd = readline("rigol> ");
 		if (!cmd) {
 			// unlock scope keypad
-			rigol_write(handle, ":KEY:LOCK DISABLE");
+			dev_send(handle, ":KEY:LOCK DISABLE");
 			printf("\n");
 			exit(0);
 		}
 		add_history(cmd);
-		rigol_write(handle, cmd);
+		dev_send(handle, cmd);
 		if (strchr(cmd, '?') == NULL) {
 			rc = 0;
 		} else {
-			rc = rigol_read(handle, buf, max_response_length);
+			rc = dev_recv(handle, buf, max_response_length);
 			if (rc <= 0) {
 				printf("[%d]:\n", rc);
 			} else if (rc < 512) {
