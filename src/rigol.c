@@ -113,8 +113,8 @@ int extract_data_length(const unsigned char *buf)
 
 int main(int argc, char **argv)
 {
-	int len, rc;
-	unsigned char buf[max_response_length];
+	unsigned char data[max_response_length];
+	int data_offset, data_length;
 
 	char device[256] = "/dev/usbtmc0";
 	if (argc > 2 && strncmp(argv[1], "-D", 2) == 0) {
@@ -131,8 +131,8 @@ int main(int argc, char **argv)
 	}
 
 	dev_send(handle, "*IDN?");
-	dev_recv(handle, buf, normal_response_length);
-	printf("%s\n", buf);
+	dev_recv(handle, data, normal_response_length);
+	printf("%s\n", data);
 	
 	//readline
 	rl_instream = stdin;
@@ -140,44 +140,41 @@ int main(int argc, char **argv)
 
 	while (1) {
 		char *cmd = readline("rigol> ");
-		if (!cmd) {
-			// unlock scope keypad
-			dev_send(handle, ":KEY:LOCK DISABLE");
-			printf("\n");
-			exit(0);
-		}
+		if (!cmd)
+			break;
 		add_history(cmd);
-		dev_send(handle, cmd);
-		if (strchr(cmd, '?') == NULL) {
-			rc = 0;
+		if (strncmp(cmd, "print", 5) == 0) {
+			print_data(data + data_offset, data_length);
+		} else if (strncmp(cmd, "save ", 4) == 0) {
+			write_to_file(cmd + 5, data + data_offset, data_length);
 		} else {
-			rc = dev_recv(handle, buf, max_response_length);
-			if (rc <= 0) {
-				printf("[%d] bytes received\n", rc);
-			} else if (rc >= 10 && strncmp(buf, "#8", 2) == 0) {
-				// data header found
-				len = extract_data_length(buf);
-				if (len != rc - 10)
-					printf("Warning: header length and read count differs: %i, %i\n",
-							len, rc - 10);
-				printf("%d bytes of data received\n", len);
-				printf("print data or save to file? ");
-				fflush(stdout);
-				char x[256];
-				fgets(x, sizeof(x), stdin);
-				if (x[strlen(x) - 1] == '\n')
-					x[strlen(x) - 1] = 0;
-				if (tolower(x[0]) == 'p')
-					print_data(buf + 10, rc);
-				else
-					write_to_file(x + 2, buf + 10, len);
-			} else if (rc < 512) {
-				// assume this is just text
-				printf("%s\n", buf);
-			} else {
-				printf("[%d] bytes received, data header missing\n", rc);
+			dev_send(handle, cmd);
+			data_offset = 0;
+			data_length = 0;
+			if (strchr(cmd, '?') != NULL) {
+				data_length = dev_recv(handle, data, max_response_length);
+				if (data_length < 0) {
+					data_length = 0;
+				} else if (data_length >= 10 && strncmp(data, "#8", 2) == 0) {
+					// data header found
+					data_offset = 10;
+					data_length -= 10;
+					if (extract_data_length(data) != data_length)
+						printf("Warning: inconsistent data length in header\n");
+					printf("%d bytes of data received\n", data_length);
+				} else if (data_length < 512) {
+					// assume this is just text
+					printf("%s\n", data);
+				} else {
+					printf("%d bytes received, data header missing\n", data_length);
+				}
 			}
 		}
 	}
+
+	// unlock scope keypad
+	dev_send(handle, ":KEY:LOCK DISABLE");
+	printf("\n");
+	exit(0);
 }
 
