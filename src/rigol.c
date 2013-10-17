@@ -23,51 +23,17 @@
  * along with this program.  If not, see [http://www.gnu.org/licenses/].
  */
 
+
+#include <errno.h>
+#include <fcntl.h>
 #include <stdlib.h>
-#include <stdio.h>
+#include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <fcntl.h>
-#include <string.h>
-#include <errno.h>
-#include <linux/usb/tmc.h>
 #include <readline/readline.h>
+#include <readline/history.h>
 
-const int max_command_length = 255;
-const int max_response_length = 1024 * 1024 + 1024;
-const int normal_response_length = 1024;
-
-int dev_send(int handle, const char *command)
-{
-	int rc;
-	char buf[max_command_length + 2];
-	buf[sizeof(buf) - 1] = 0;
-	buf[sizeof(buf) - 2] = 0;
-	if(strlen(command) > max_command_length) {
-		fprintf(stderr, "Could not send command: string too long");
-		return -1;
-	}
-	strncpy(buf, command, max_command_length);
-	strcat(buf, "\n");
-	rc = write(handle, buf, strlen(buf));
-	if (rc < 0)
-		perror("Could not send command");
-	return rc;
-}
-
-int dev_recv(int handle, unsigned char *buf, size_t size)
-{
-	int rc;
-	if (!size)
-		return -1;
-	buf[0] = 0;
-	rc = read(handle, buf, size);
-	if ((rc > 0) && (rc < size))
-		buf[rc] = 0;
-	if (rc < 0)
-		perror("Could not receive response");
-	return rc;
-}
+#include "connection.h"
 
 void print_data(const char *buf, size_t count)
 {
@@ -101,21 +67,64 @@ void write_to_file(const char *filename, const char *buf, size_t count)
 				strerror(errno));
 }
 
-int extract_data_length(const unsigned char *buf)
+void cmd_print(const struct connection *con)
 {
-	int len = -1;
-	unsigned char head[10];
-	strncpy(head, buf, 10);
-	if (1 != sscanf(head + 2, "%d", &len))
-		printf("Warning: malformed header\n");
-	return len;
+	if (con->data_size > 0)
+		print_data(con->buffer + 10, con->data_size);
+}
+
+void cmd_save(const struct connection *con, const char *filename)
+{
+	if (con->data_size > 0)
+		write_to_file(filename, con->buffer + 10, con->data_size);
+}
+
+void _cmd_receive_response(struct connection *con)
+{
+	int size = con_recv(con);
+	if (size <= 0)
+		return;
+	if (con->data_size >= 0)
+		printf("%i bytes of data received\n", con->data_size);
+	else
+		printf("%s\n", con->buffer);
+}
+
+void cmd_send_direct(struct connection *con, const char *cmd)
+{
+	int size = con_send(con, cmd);
+	if (size <= 0)
+		return;
+	if (strchr(cmd, '?') != NULL) {
+		_cmd_receive_response(con);
+	}
+}
+
+void enter_console(struct connection *con)
+{
+	// readline
+	rl_instream = stdin;
+	rl_outstream = stderr;
+
+	cmd_send_direct(con, "*IDN?");
+	while (1) {
+		char *cmd = readline("rigol> ");
+		if (!cmd)
+			break;
+		add_history(cmd);
+		if (strncmp(cmd, "print", 5) == 0) {
+			cmd_print(con);
+		} else if (strncmp(cmd, "save ", 4) == 0) {
+			cmd_save(con, cmd + 5);
+		} else {
+			cmd_send_direct(con, cmd);
+		}
+	}
+	printf("\n");
 }
 
 int main(int argc, char **argv)
 {
-	unsigned char data[max_response_length];
-	int data_offset, data_length;
-
 	char device[256] = "/dev/usbtmc0";
 	if (argc > 2 && strncmp(argv[1], "-D", 2) == 0) {
 		strcpy(device, argv[2]);
@@ -123,58 +132,16 @@ int main(int argc, char **argv)
 		*argv += 2;
 	}
 
-	int handle = open(device, O_RDWR);
-	if (handle < 0) {
+	struct connection con;
+	con_open(&con, device);
+	if (con.fd < 0) {
 		fprintf(stderr, "Could not open device '%s': %s\n", device,
 				strerror(errno));
 		exit(1);
 	}
 
-	dev_send(handle, "*IDN?");
-	dev_recv(handle, data, normal_response_length);
-	printf("%s\n", data);
-	
-	//readline
-	rl_instream = stdin;
-	rl_outstream = stderr;
-
-	while (1) {
-		char *cmd = readline("rigol> ");
-		if (!cmd)
-			break;
-		add_history(cmd);
-		if (strncmp(cmd, "print", 5) == 0) {
-			print_data(data + data_offset, data_length);
-		} else if (strncmp(cmd, "save ", 4) == 0) {
-			write_to_file(cmd + 5, data + data_offset, data_length);
-		} else {
-			dev_send(handle, cmd);
-			data_offset = 0;
-			data_length = 0;
-			if (strchr(cmd, '?') != NULL) {
-				data_length = dev_recv(handle, data, max_response_length);
-				if (data_length < 0) {
-					data_length = 0;
-				} else if (data_length >= 10 && strncmp(data, "#8", 2) == 0) {
-					// data header found
-					data_offset = 10;
-					data_length -= 10;
-					if (extract_data_length(data) != data_length)
-						printf("Warning: inconsistent data length in header\n");
-					printf("%d bytes of data received\n", data_length);
-				} else if (data_length < 512) {
-					// assume this is just text
-					printf("%s\n", data);
-				} else {
-					printf("%d bytes received, data header missing\n", data_length);
-				}
-			}
-		}
-	}
-
-	// unlock scope keypad
-	dev_send(handle, ":KEY:LOCK DISABLE");
-	printf("\n");
-	exit(0);
+	enter_console(&con);
+	con_close(&con);
+	exit(EXIT_SUCCESS);
 }
 

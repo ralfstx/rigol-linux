@@ -1,10 +1,20 @@
 
 CC = gcc
+CFLAGS = -O -Wall
+
 SRCDIR = src
 BINDIR = bin
 
-$(BINDIR)/rigol: $(SRCDIR)/rigol.c
-	$(CC) -O $(SRCDIR)/rigol.c -o $(BINDIR)/rigol -l readline
+LIBS = -lreadline
+
+_OBJECTS = rigol.o connection.o
+OBJECTS = $(patsubst %,$(BINDIR)/%,$(_OBJECTS))
+
+$(BINDIR)/rigol: $(OBJECTS)
+	$(CC) $(CFLAGS) -o $@ $(OBJECTS) $(LIBS)
+
+$(BINDIR)/%.o: $(SRCDIR)/%.c
+	$(CC) -c -o $@ $< $(CFLAGS)
 
 install:
 	cp $(BINDIR)/rigol /usr/local/bin
