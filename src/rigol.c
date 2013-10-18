@@ -35,6 +35,8 @@
 
 #include "connection.h"
 
+// HELPERS
+
 void print_data(const char *buf, size_t count)
 {
 	int i;
@@ -51,13 +53,13 @@ void print_data(const char *buf, size_t count)
 		printf("\n");
 }
 
-void write_to_file(const char *filename, const char *buf, size_t count)
+int write_to_file(const char *filename, const char *buf, size_t count)
 {
 	int fd = open(filename, O_WRONLY | O_CREAT | O_TRUNC, 0666);
 	if (fd < 0) {
 		fprintf(stderr, "Could not open file '%s': %s\n", filename,
 				strerror(errno));
-		return;
+		return -1;
 	}
 	if (count != write(fd, buf, count))
 		fprintf(stderr, "Could not write to file '%s': %s\n", filename,
@@ -65,7 +67,34 @@ void write_to_file(const char *filename, const char *buf, size_t count)
 	if (close(fd))
 		fprintf(stderr, "Could not close file '%s': %s\n", filename,
 				strerror(errno));
+	return count;
 }
+
+char *trim_lead_space(char *str)
+{
+	char *res = str;
+	while (res[0] != 0 && isspace(res[0]))
+		res++;
+	return res;
+}
+
+void strip_trail_space(char *str)
+{
+	int len = strlen(str);
+	while(len > 0 && isspace(str[len - 1]))
+		len--;
+	str[len] = 0;
+}
+
+int starts_with_word(char *str, char *word)
+{
+	int len = strlen(word);
+	if (strncmp(str, word, len) != 0)
+		return 0;
+	return str[len] == 0 || isspace(str[len]);
+}
+
+// COMMANDS
 
 void cmd_print(const struct connection *con)
 {
@@ -75,8 +104,13 @@ void cmd_print(const struct connection *con)
 
 void cmd_save(const struct connection *con, const char *filename)
 {
-	if (con->data_size > 0)
-		write_to_file(filename, con->buffer + 10, con->data_size);
+	if (con->data_size <= 0) {
+		printf("no data to save\n");
+		return;
+	}
+	int count = write_to_file(filename, con->buffer + 10, con->data_size);
+	if (count > 0)
+		printf("saved %i bytes to %s\n", count, filename);
 }
 
 void _cmd_receive_response(struct connection *con)
@@ -100,25 +134,38 @@ void cmd_send_direct(struct connection *con, const char *cmd)
 	}
 }
 
+// INTERACTIVE CONSOLE
+
+void process_cmd(struct connection *con, char *cmd)
+{
+	if (starts_with_word(cmd, "print"))
+		cmd_print(con);
+	else if (starts_with_word(cmd, "save"))
+		cmd_save(con, trim_lead_space(cmd + 4));
+	else if (cmd[0] == ':' || cmd[0] == '*')
+		cmd_send_direct(con, cmd);
+	else
+		printf("unknown command\n");
+}
+
 void enter_console(struct connection *con)
 {
+	char *cmd;
 	// readline
 	rl_instream = stdin;
 	rl_outstream = stderr;
 
 	cmd_send_direct(con, "*IDN?");
 	while (1) {
-		char *cmd = readline("rigol> ");
+		cmd = readline("rigol> ");
 		if (!cmd)
 			break;
+		cmd = trim_lead_space(cmd);
+		strip_trail_space(cmd);
+		if (strlen(cmd) == 0)
+			continue;
+		process_cmd(con, cmd);
 		add_history(cmd);
-		if (strncmp(cmd, "print", 5) == 0) {
-			cmd_print(con);
-		} else if (strncmp(cmd, "save ", 4) == 0) {
-			cmd_save(con, cmd + 5);
-		} else {
-			cmd_send_direct(con, cmd);
-		}
 	}
 	printf("\n");
 }
@@ -144,4 +191,3 @@ int main(int argc, char **argv)
 	con_close(&con);
 	exit(EXIT_SUCCESS);
 }
-
